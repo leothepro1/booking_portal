@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── BOENDEKATEGORIER ──────────────────────────────────────
+
+model AccommodationCategory {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  shortDescription  String
+  longDescription   String
+  type              AccommodationType
+  imageUrls         String[]
+  facilities        String[]
+  maxGuests         Int
+  basePricePerNight Int // ören — baspris som rate plans beräknas mot
+  isActive          Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+
+  inventory    Inventory[]
+  addons       CategoryAddon[]
+  ratePlans    CategoryRatePlan[]
+  reservations Reservation[]
+
+  @@map("accommodation_categories")
+}
+
+enum AccommodationType {
+  CAMPING
+  APARTMENT
+  HOTEL
+  CABIN
+}
+
+// ─── RATE PLANS ────────────────────────────────────────────
+
+model RatePlan {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  description        String
+  cancellationPolicy CancellationPolicy
+  priceRule          PriceRule
+  priceAmount        Int // ören (BASE: ignoreras, FIXED: fast pris, MULTIPLIER: heltal %, t.ex. 85 = 85%)
+  currency           String             @default("SEK")
+  validFrom          DateTime?
+  validTo            DateTime?
+  isActive           Boolean            @default(true)
+  sortOrder          Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  deletedAt          DateTime?
+
+  categories    CategoryRatePlan[]
+  includedAddons RatePlanAddon[]
+  reservations  Reservation[]
+
+  @@map("rate_plans")
+}
+
+enum CancellationPolicy {
+  FLEXIBLE
+  NON_REFUNDABLE
+  MODERATE
+}
+
+enum PriceRule {
+  BASE
+  FIXED
+  MULTIPLIER
+}
+
+model CategoryRatePlan {
+  categoryId String @db.Uuid
+  ratePlanId String @db.Uuid
+
+  category AccommodationCategory @relation(fields: [categoryId], references: [id])
+  ratePlan RatePlan               @relation(fields: [ratePlanId], references: [id])
+
+  @@id([categoryId, ratePlanId])
+  @@map("category_rate_plans")
+}
+
+model RatePlanAddon {
+  ratePlanId String @db.Uuid
+  addonId    String @db.Uuid
+  quantity   Int    @default(1)
+
+  ratePlan RatePlan @relation(fields: [ratePlanId], references: [id])
+  addon    Addon    @relation(fields: [addonId], references: [id])
+
+  @@id([ratePlanId, addonId])
+  @@map("rate_plan_addons")
+}
+
+// ─── INVENTARIE (tillgänglighet per natt) ──────────────────
+
+model Inventory {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId     String   @db.Uuid
+  date           DateTime @db.Date
+  totalUnits     Int
+  availableUnits Int
+  priceOverride  Int? // ören — null = använd category.basePricePerNight
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category AccommodationCategory @relation(fields: [categoryId], references: [id])
+
+  @@unique([categoryId, date])
+  @@map("inventory")
+}
+
+// ─── TILLÄGG (add-ons) ─────────────────────────────────────
+
+model Addon {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  description String
+  price       Int // ören, per styck
+  currency    String    @default("SEK")
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  categories        CategoryAddon[]
+  ratePlanAddons    RatePlanAddon[]
+  reservationAddons ReservationAddon[]
+
+  @@map("addons")
+}
+
+model CategoryAddon {
+  categoryId String @db.Uuid
+  addonId    String @db.Uuid
+
+  category AccommodationCategory @relation(fields: [categoryId], references: [id])
+  addon    Addon                  @relation(fields: [addonId], references: [id])
+
+  @@id([categoryId, addonId])
+  @@map("category_addons")
+}
+
+// ─── RESERVATIONER ─────────────────────────────────────────
+
+model Reservation {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId    String            @db.Uuid
+  ratePlanId    String            @db.Uuid
+  checkIn       DateTime          @db.Date
+  checkOut      DateTime          @db.Date
+  guests        Int
+  status        ReservationStatus @default(PENDING)
+  lockExpiresAt DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  category AccommodationCategory @relation(fields: [categoryId], references: [id])
+  ratePlan RatePlan               @relation(fields: [ratePlanId], references: [id])
+  booking  Booking?
+  addons   ReservationAddon[]
+
+  @@map("reservations")
+}
+
+enum ReservationStatus {
+  PENDING
+  LOCKED
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+model ReservationAddon {
+  id            String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId String @db.Uuid
+  addonId       String @db.Uuid
+  quantity      Int    @default(1)
+  priceSnapshot Int // ören — pris vid bokningstillfället
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  addon       Addon       @relation(fields: [addonId], references: [id])
+
+  @@map("reservation_addons")
+}
+
+// ─── BOKNINGAR (bekräftade) ─────────────────────────────────
+
+model Booking {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId String        @unique @db.Uuid
+  bookingToken  String        @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  guestName     String
+  guestEmail    String
+  guestPhone    String?
+  totalAmount   Int // ören
+  currency      String        @default("SEK")
+  status        BookingStatus @default(PENDING)
+  confirmedAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  payment     Payment?
+
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+}
+
+// ─── BETALNINGAR ────────────────────────────────────────────
+
+model Payment {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId      String        @unique @db.Uuid
+  idempotencyKey String        @unique
+  providerRef    String?
+  amount         Int // ören
+  currency       String        @default("SEK")
+  status         PaymentStatus @default(PENDING)
+  authorizedAt   DateTime?
+  capturedAt     DateTime?
+  cancelledAt    DateTime?
+  refundedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  booking Booking        @relation(fields: [bookingId], references: [id])
+  events  PaymentEvent[]
+
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  CANCELLED
+  REFUNDED
+}
+
+// ─── AUDIT LOG (oföränderlig) ────────────────────────────────
+
+model PaymentEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId String   @db.Uuid
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@map("payment_events")
+}
